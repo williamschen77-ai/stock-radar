@@ -1,103 +1,85 @@
+// 台灣主動/被動 ETF 持股資料
+// 資料來源：MoneyDJ ETF 成分股頁面（每日更新的真實持股權重）
+// 注意：MoneyDJ 僅提供「目前」持股快照，無歷史權重可查，故本 API 不提供趨勢資料。
+
+const ACTIVE_ETF_CODES = [
+  "0050", "0056", "006208",
+  "00878", "00881", "00891", "00892", "00900",
+  "00919", "00929", "00934", "00940", "00944", "00946",
+  "00679B",
+];
+
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 小時
+let cache = { time: 0, etfs: [] };
+
+async function fetchEtfHoldings(code) {
+  const url = `https://www.moneydj.com/ETF/X/Basic/Basic0007B.xdjhtm?etfid=${code}.TW`;
+  const r = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    signal: AbortSignal.timeout(8000),
+  });
+  const html = await r.text();
+
+  const titleMatch = html.match(/<title>([^<]*)<\/title>/);
+  const name = titleMatch ? titleMatch[1].trim() : code;
+
+  const dateMatch = html.match(/資料日期[：:]\s*(\d{4}\/\d{2}\/\d{2})/);
+  const asOf = dateMatch ? dateMatch[1] : null;
+
+  const rowRe = /etfid=(\d+)\.TW[^']*'>([^(<]+)\([^)]*\)<\/a><\/td><td class="col06">([\d.]+)<\/td><td class="col07">([\d,]+)<\/td>/g;
+  const holdings = [];
+  let m;
+  while ((m = rowRe.exec(html))) {
+    holdings.push({
+      code: m[1],
+      name: m[2],
+      weight: parseFloat(m[3]),
+      shares: parseInt(m[4].replace(/,/g, ''), 10),
+    });
+  }
+
+  return { code, name, asOf, holdings };
+}
+
+async function getAllHoldings() {
+  if (cache.etfs.length && Date.now() - cache.time < CACHE_TTL_MS) return cache.etfs;
+
+  const results = await Promise.all(
+    ACTIVE_ETF_CODES.map(code => fetchEtfHoldings(code).catch(() => null))
+  );
+  const etfs = results.filter(e => e && e.holdings.length > 0);
+
+  // 只在有拿到資料時才更新快取，避免暫時性錯誤把快取清空
+  if (etfs.length > 0) cache = { time: Date.now(), etfs };
+  return cache.etfs;
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   const { code } = req.query;
   if (!code) return res.status(400).json({ error: 'code required' });
-  const token = process.env.FINMIND_TOKEN || '';
-  if (!token) return res.json({ data: [], source: 'no_token' });
-
-  const ACTIVE_ETFS = [
-    { code:"00892", name:"富邦台灣半導體", mgr:"富邦投信" },
-    { code:"00891", name:"中信關鍵半導體", mgr:"中信投信" },
-    { code:"00881", name:"國泰台灣5G+",    mgr:"國泰投信" },
-    { code:"00878", name:"國泰永續高股息",  mgr:"國泰投信" },
-    { code:"00919", name:"群益台灣精選高息",mgr:"群益投信" },
-    { code:"00929", name:"復華台灣科技優息",mgr:"復華投信" },
-    { code:"00934", name:"中信成長高股息",  mgr:"中信投信" },
-    { code:"00940", name:"元大台灣價值高息",mgr:"元大投信" },
-    { code:"00900", name:"富邦特選高股息30",mgr:"富邦投信" },
-    { code:"0050",  name:"元大台灣50",     mgr:"元大投信" },
-    { code:"0056",  name:"元大高股息",      mgr:"元大投信" },
-    { code:"006208",name:"富邦台50",        mgr:"富邦投信" },
-    { code:"00944", name:"群益半導體收益",  mgr:"群益投信" },
-    { code:"00946", name:"元大台灣晶圓製造",mgr:"元大投信" },
-    { code:"00679B",name:"元大美債20年",    mgr:"元大投信" },
-  ];
-
-  // 計算日期區間（6個月）
-  const today = new Date();
-  const start = new Date(today); start.setMonth(start.getMonth() - 6);
-  const startStr = start.toISOString().slice(0,10);
-  const endStr   = today.toISOString().slice(0,10);
 
   try {
-    // 並行查詢所有ETF成分股
-    const results = await Promise.all(
-      ACTIVE_ETFS.map(async (etf) => {
-        try {
-          // FinMind TaiwanETFComponents dataset
-          const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanETFComponents&data_id=${etf.code}&start_date=${startStr}&end_date=${endStr}&token=${token}`;
-          const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
-          const d = await r.json();
-          if (!d?.data) return null;
+    const etfs = await getAllHoldings();
+    if (!etfs.length) return res.json({ data: [], source: 'error' });
 
-          // 找到包含此股票代號的記錄
-          const rows = d.data.filter(row =>
-            row.stock_id === code ||
-            row.component_id === code ||
-            row.symbol === code
-          );
-          if (!rows.length) return null;
-
-          // 建立歷史趨勢
-          const weightHistory = rows
-            .map(row => ({
-              date:   row.date,
-              weight: parseFloat(row.weight || row.percent || row.holding_ratio || 0)
-            }))
-            .filter(r => r.date)
-            .sort((a,b) => a.date.localeCompare(b.date));
-
-          if (!weightHistory.length) return null;
-          const latest = weightHistory[weightHistory.length - 1];
-          const prev   = weightHistory.length > 1 ? weightHistory[weightHistory.length - 2] : latest;
-          const delta  = +(latest.weight - prev.weight).toFixed(2);
-
-          return { ...etf, currentWeight: latest.weight, delta, weightHistory, source: 'finmind' };
-        } catch (_) { return null; }
+    const holders = etfs
+      .map(etf => {
+        const h = etf.holdings.find(x => x.code === code);
+        if (!h) return null;
+        return {
+          code: etf.code,
+          name: etf.name,
+          currentWeight: h.weight,
+          shares: h.shares,
+          asOf: etf.asOf,
+        };
       })
-    );
+      .filter(Boolean)
+      .sort((a, b) => b.currentWeight - a.currentWeight);
 
-    const holders = results.filter(Boolean);
-    if (holders.length > 0) return res.json({ data: holders, source: 'finmind' });
-
-    // Fallback: 用 TaiwanStockHoldingSharesPer 查大股東（可能包含ETF）
-    try {
-      const url2 = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockHoldingSharesPer&data_id=${code}&start_date=${startStr}&end_date=${endStr}&token=${token}`;
-      const r2 = await fetch(url2, { signal: AbortSignal.timeout(10000) });
-      const d2 = await r2.json();
-      const etfKeywords = ['投信','基金','ETF','元大','富邦','國泰','群益','中信','復華','野村'];
-      const etfRows = (d2?.data||[]).filter(row =>
-        etfKeywords.some(kw => (row.name||'').includes(kw))
-      );
-      if (etfRows.length) {
-        const grouped = {};
-        etfRows.forEach(row => {
-          const key = row.name||row.shareholder_name||'未知';
-          if (!grouped[key]) grouped[key] = [];
-          grouped[key].push({ date: row.date, weight: parseFloat(row.percent||row.ratio||0) });
-        });
-        const data = Object.entries(grouped).map(([name, history]) => {
-          const sorted = history.sort((a,b) => a.date.localeCompare(b.date));
-          const latest = sorted[sorted.length-1];
-          const prev   = sorted.length > 1 ? sorted[sorted.length-2] : latest;
-          return { code:'', name, mgr:'', currentWeight: latest?.weight||0, delta: +(( latest?.weight||0)-(prev?.weight||0)).toFixed(2), weightHistory: sorted, source:'finmind_holder' };
-        });
-        return res.json({ data, source: 'finmind_holder' });
-      }
-    } catch(_) {}
-
-    return res.json({ data: [], source: 'finmind_empty' });
-  } catch(e) {
+    return res.json({ data: holders, source: holders.length ? 'moneydj' : 'moneydj_empty' });
+  } catch (e) {
     return res.status(500).json({ data: [], source: 'error', error: e.message });
   }
 }

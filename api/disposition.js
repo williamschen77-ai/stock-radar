@@ -27,65 +27,56 @@ export default async function handler(req, res) {
     try {
       const r = await fetch(dispUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
       const d = await r.json();
+      // 欄位順序（TWSE punish API）：0編號 1公布日期 2證券代號 3證券名稱 4累計
+      // 5處置條件 6處置起迄時間(如 "115/07/03～115/07/16") 7處置措施 8處置內容 9備註
       if (d?.data) {
-        const found = d.data.find(row => row[1] === code || row[0]?.includes(code));
+        const found = d.data.find(row => row[2] === code);
         if (found) {
+          const [startRoc, endRoc] = (found[6] || '').split('～').map(s => s?.trim());
+          const rocToDate = s => {
+            const m = s?.match(/^(\d{2,3})\/(\d{2})\/(\d{2})$/);
+            return m ? `${+m[1] + 1911}-${m[2]}-${m[3]}` : '';
+          };
+          const startDate = rocToDate(startRoc);
+          const endDate = rocToDate(endRoc);
           result.isDisposed = true;
           result.dispositionInfo = {
-            name: found[0],
-            startDate: found[2] || '',
-            endDate: found[3] || '',
-            reason: found[4] || '處置中',
+            name: found[3],
+            startDate,
+            endDate,
+            reason: found[5] || '處置中',
           };
-          // Check if close to unlock
-          if (found[3]) {
-            const unlockD = new Date(found[3].replace(/\//g,'-'));
+          if (endDate) {
+            const unlockD = new Date(endDate);
             const daysLeft = Math.ceil((unlockD - today) / 86400000);
-            result.unlockDate = found[3];
-            if (daysLeft >= 0 && daysLeft <= 5) result.nearUnlock = true;
-            if (daysLeft < 0) result.nearUnlock = true;
+            result.unlockDate = endDate;
+            if (daysLeft <= 5) result.nearUnlock = true;
           }
         }
       }
     } catch(_) {}
 
-    // 2. 查詢融券回補日（即將被關的前兆）
-    try {
-      const suspUrl = `https://www.twse.com.tw/rwd/zh/fund/shortSaleMarginPurchase?response=json&selectType=MS`;
-      const r2 = await fetch(suspUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-      const d2 = await r2.json();
-      if (d2?.data) {
-        const found2 = d2.data.find(row => row[0] === code);
-        if (found2) {
-          result.marginShortSale = {
-            stockCode: found2[0],
-            stockName: found2[1],
-            lastBuyDate: found2[2] || '',
-            repayDate: found2[3] || '',
-            reason: found2[4] || '',
-          };
-          result.nearLock = true;
-          result.lockDate = found2[2] || '';
-          result.unlockDate = found2[3] || '';
-        }
-      }
-    } catch(_) {}
-
-    // 3. 查詢暫停融券賣出（另一種被關）
+    // 2. 查詢融資融券暫停期間（除息、股東會等原因，FinMind 免token即可查詢）
     try {
       const token = process.env.FINMIND_TOKEN || '';
-      if (token) {
-        const fmUrl = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMarginShortSaleSuspension&data_id=${code}&start_date=${startDate.toISOString().slice(0,10)}&token=${token}`;
-        const r3 = await fetch(fmUrl);
-        const d3 = await r3.json();
-        if (d3?.data?.length > 0) {
-          const latest = d3.data[d3.data.length - 1];
-          result.marginShortSale = result.marginShortSale || {
+      const tokenParam = token ? `&token=${token}` : '';
+      const fmUrl = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMarginShortSaleSuspension&data_id=${code}&start_date=${startDate.toISOString().slice(0,10)}${tokenParam}`;
+      const r2 = await fetch(fmUrl, { signal: AbortSignal.timeout(8000) });
+      const d2 = await r2.json();
+      if (d2?.data?.length > 0) {
+        // 只取尚未結束（今天或未來）的暫停期間，避免顯示過期資訊
+        const upcoming = d2.data.filter(row => row.end_date && new Date(row.end_date) >= new Date(today.toISOString().slice(0,10)));
+        const latest = upcoming[upcoming.length - 1];
+        if (latest) {
+          result.marginShortSale = {
             stockCode: code,
+            lastBuyDate: latest.date || '',
             repayDate: latest.end_date || '',
-            reason: '暫停融券賣出',
+            reason: latest.reason || '融資融券暫停',
           };
           result.nearLock = true;
+          result.lockDate = latest.date || '';
+          result.unlockDate = latest.end_date || '';
         }
       }
     } catch(_) {}

@@ -23,7 +23,7 @@ const apiPost=(url,body)=>fetch(url,{method:'POST',headers:{'Content-Type':'appl
 
 async function fetchStockData(code,range){
   const [q,inst,etf,disp,news]=await Promise.allSettled([
-    apiFetch(`/api/quote?symbol=${code}.TW&range=${range}&interval=1d`),
+    apiFetch(`/api/quote?code=${code}&range=${range}&interval=1d`),
     apiFetch(`/api/institutional?code=${code}`).then(d=>d.data||[]),
     apiFetch(`/api/etf-holdings?code=${code}`),
     apiFetch(`/api/disposition?code=${code}`),
@@ -124,12 +124,6 @@ function InstBarChart({data}){
     {ser.map((s,i)=><g key={i}><rect x={pad.l+i*48} y={3} width={7} height={7} fill={s.color} rx="1"/><text x={pad.l+i*48+10} y={11} fill={T.muted} fontSize="8">{s.label}</text></g>)}
   </svg>);
 }
-function Spark({data,color,w=140,h=26}){
-  if(!data?.length)return null;
-  const vals=data.map(d=>d.weight??0),min=Math.min(...vals),max=Math.max(...vals),range=max-min||0.1;
-  const pts=vals.map((v,i)=>`${(i/(vals.length-1||1))*w},${h-((v-min)/range)*h}`).join(" ");
-  return(<svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{display:"block"}}><polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" opacity="0.9"/></svg>);
-}
 function ScoreGauge({score,rating,color}){
   const s=Math.max(0,Math.min(100,score||50));
   const r=50,cx=65,cy=65,sw=9,circ=2*Math.PI*r,arc=circ*0.75,filled=arc*(s/100),col=color||T.buy;
@@ -140,17 +134,6 @@ function ScoreGauge({score,rating,color}){
     <text x={cx} y={cy+11} textAnchor="middle" fill={col} fontSize="8" fontWeight="700">{rating||'觀望'}</text>
   </svg>);
 }
-function ConsensusMeter({etfData}){
-  if(!etfData?.length)return null;
-  const buyers=etfData.filter(e=>(e.delta||0)>0.05).length,sellers=etfData.filter(e=>(e.delta||0)<-0.05).length;
-  const score=Math.round((buyers/etfData.length)*100),col=score>=60?T.buy:score<=40?T.sell:T.yellow;
-  return(<div style={{minWidth:150,background:T.card,borderRadius:8,padding:"8px 11px",border:`1px solid ${T.border}`}}>
-    <div style={{display:"flex",justifyContent:"space-between",fontSize:10,marginBottom:4}}><span style={{color:T.muted}}>ETF共識</span><span style={{color:col,fontWeight:700}}>{score>=60?"偏多":score<=40?"偏空":"分歧"}</span></div>
-    <div style={{height:4,background:T.dim,borderRadius:2,overflow:"hidden",marginBottom:4}}><div style={{width:`${score}%`,height:"100%",background:col,borderRadius:2}}/></div>
-    <div style={{fontSize:9,color:T.muted}}>▲{buyers} ▼{sellers} 持{etfData.length-buyers-sellers}</div>
-  </div>);
-}
-
 // ── Search Box (dynamic) ───────────────────────────────────────
 function SearchBox({onSelect}){
   const [val,setVal]=useState(""),[open,setOpen]=useState(false);
@@ -181,11 +164,10 @@ function SearchBox({onSelect}){
 function VisitorCount(){
   const [data,setData]=useState(null);
   useEffect(()=>{apiFetch('/api/visitors').then(setData).catch(()=>{});},[]);
-  if(!data)return null;
+  if(!data||data.today==null||data.total==null)return null;
   return(<div style={{display:"flex",gap:12,alignItems:"center",fontSize:10,color:T.muted}}>
     <span>👁 今日 <b style={{color:T.text}}>{data.today}</b></span>
     <span>🌐 累計 <b style={{color:T.text}}>{data.total?.toLocaleString()}</b></span>
-    <span style={{color:T.buy}}>● 在線 {data.online}</span>
   </div>);
 }
 
@@ -327,7 +309,6 @@ export default function App(){
           </div>
           <div style={{display:"flex",gap:8,marginLeft:"auto",flexWrap:"wrap",alignItems:"center"}}>
             {MA_OPT.map(m=>latestMA[m.key]?<div key={m.key} style={{textAlign:"center"}}><div style={{fontSize:8,color:m.color,fontWeight:700}}>{m.label}</div><div style={{fontSize:11,fontWeight:600}}>{fmt(latestMA[m.key])}</div></div>:null)}
-            {etfData.length>0&&<ConsensusMeter etfData={etfData}/>}
           </div>
         </>:null}
       </div>
@@ -420,23 +401,22 @@ export default function App(){
 
         {/* ETF */}
         {tab==="etf"&&(<div style={{display:"flex",flexDirection:"column",gap:8}}>
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
-            <span style={{fontSize:11,color:T.muted}}>目前有 <b style={{color:T.accent}}>{etfData.length} 檔</b> ETF持有 {displayName}</span>
-            {etfSource==="finmind"&&<span style={{fontSize:9,background:T.buy+"18",color:T.buy,padding:"2px 7px",borderRadius:20}}>✓ 真實資料</span>}
-            {etfSource==="finmind_holder"&&<span style={{fontSize:9,background:T.accent+"18",color:T.accent,padding:"2px 7px",borderRadius:20}}>✓ 大股東資料</span>}
-            {etfSource==="finmind_empty"&&<span style={{fontSize:9,background:T.yellow+"18",color:T.yellow,padding:"2px 7px",borderRadius:20}}>此期間無ETF持倉記錄</span>}
-            {etfSource==="no_token"&&<span style={{fontSize:9,background:T.sell+"18",color:T.sell,padding:"2px 7px",borderRadius:20}}>⚠ 請在Vercel設定FINMIND_TOKEN</span>}
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2,flexWrap:"wrap"}}>
+            <span style={{fontSize:11,color:T.muted}}>目前有 <b style={{color:T.accent}}>{etfData.length} 檔</b> 追蹤中的ETF持有 {displayName}</span>
+            {etfSource==="moneydj"&&<span style={{fontSize:9,background:T.buy+"18",color:T.buy,padding:"2px 7px",borderRadius:20}}>✓ 真實資料 · MoneyDJ</span>}
+            {etfSource==="moneydj_empty"&&<span style={{fontSize:9,background:T.yellow+"18",color:T.yellow,padding:"2px 7px",borderRadius:20}}>目前追蹤的ETF清單中無人持有</span>}
+            {etfSource==="error"&&<span style={{fontSize:9,background:T.sell+"18",color:T.sell,padding:"2px 7px",borderRadius:20}}>⚠ 資料來源暫時無法連線</span>}
           </div>
+          <div style={{fontSize:9,color:T.muted}}>僅涵蓋 15 檔主要台股ETF（0050、0056、006208、00878等），非市場全部ETF；僅顯示最新一期持股快照，無歷史權重可查。</div>
           {etfData.length===0&&C(<div style={{padding:16,textAlign:"center",color:T.muted,fontSize:12}}>查無ETF持倉資料</div>)}
           {etfData.map((etf,i)=>(
-            <div key={etf.code||i} style={{background:T.card,borderRadius:10,border:`1px solid ${T.border}`,padding:"10px 14px",display:"grid",gridTemplateColumns:"175px 80px 80px 1fr 100px",alignItems:"center",gap:12}}>
+            <div key={etf.code||i} style={{background:T.card,borderRadius:10,border:`1px solid ${T.border}`,padding:"10px 14px",display:"grid",gridTemplateColumns:"1fr 100px 140px 110px",alignItems:"center",gap:12}}>
               <div style={{display:"flex",alignItems:"center",gap:7}}><div style={{width:3,height:24,background:T.etfColors[i%T.etfColors.length],borderRadius:2}}/>
-                <div><div style={{fontWeight:700,fontSize:11}}>{etf.name}</div><div style={{color:T.muted,fontSize:9}}>{etf.code}{etf.mgr?` · ${etf.mgr}`:""}</div></div>
+                <div><div style={{fontWeight:700,fontSize:11}}>{etf.name}</div><div style={{color:T.muted,fontSize:9}}>{etf.code}</div></div>
               </div>
               <div><div style={{fontSize:9,color:T.muted,marginBottom:1}}>持倉比重</div><div style={{fontWeight:800,fontSize:14,color:T.etfColors[i%T.etfColors.length]}}>{Number(etf.currentWeight||0).toFixed(2)}%</div></div>
-              <div><div style={{fontSize:9,color:T.muted,marginBottom:1}}>月變化</div><div style={{fontWeight:700,fontSize:12,color:(etf.delta||0)>0.05?T.buy:(etf.delta||0)<-0.05?T.sell:T.muted}}>{(etf.delta||0)>0?"+":""}{Number(etf.delta||0).toFixed(2)}%</div></div>
-              <div><div style={{fontSize:9,color:T.muted,marginBottom:3}}>比重趨勢</div><Spark data={etf.weightHistory||[]} color={T.etfColors[i%T.etfColors.length]} w={130} h={24}/></div>
-              <div style={{fontSize:9,color:T.muted,lineHeight:1.9}}>{(etf.weightHistory||[]).slice(-4).map((h,j)=><div key={j}>{h.date?.slice(5)} <span style={{color:T.text}}>{Number(h.weight||0).toFixed(2)}%</span></div>)}</div>
+              <div><div style={{fontSize:9,color:T.muted,marginBottom:1}}>持有股數</div><div style={{fontWeight:600,fontSize:12}}>{etf.shares?Number(etf.shares).toLocaleString():"—"}</div></div>
+              <div><div style={{fontSize:9,color:T.muted,marginBottom:1}}>資料日期</div><div style={{fontSize:11,color:T.muted}}>{etf.asOf||"—"}</div></div>
             </div>
           ))}
         </div>)}
