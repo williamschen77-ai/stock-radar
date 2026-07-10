@@ -1,45 +1,12 @@
 // 台灣主動/被動 ETF 持股資料
 // 資料來源：MoneyDJ ETF 成分股頁面（每日更新的真實持股權重）
-// 注意：MoneyDJ 僅提供「目前」持股快照，無歷史權重可查，故本 API 不提供趨勢資料。
+// 注意：MoneyDJ 僅提供「目前」持股快照，無歷史權重可查，故本 API 不提供趨勢資料
+// （歷史累積另見 cron/snapshot-etf.js + etf-flow.js）。
 
-const ACTIVE_ETF_CODES = [
-  "0050", "0056", "006208",
-  "00878", "00881", "00891", "00892", "00900",
-  "00919", "00929", "00934", "00940", "00944", "00946",
-  "00679B",
-];
+import { ACTIVE_ETF_CODES, fetchEtfHoldings } from './_lib/moneydj.js';
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 小時
 let cache = { time: 0, etfs: [] };
-
-async function fetchEtfHoldings(code) {
-  const url = `https://www.moneydj.com/ETF/X/Basic/Basic0007B.xdjhtm?etfid=${code}.TW`;
-  const r = await fetch(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-    signal: AbortSignal.timeout(8000),
-  });
-  const html = await r.text();
-
-  const titleMatch = html.match(/<title>([^<]*)<\/title>/);
-  const name = titleMatch ? titleMatch[1].trim() : code;
-
-  const dateMatch = html.match(/資料日期[：:]\s*(\d{4}\/\d{2}\/\d{2})/);
-  const asOf = dateMatch ? dateMatch[1] : null;
-
-  const rowRe = /etfid=(\d+)\.TW[^']*'>([^(<]+)\([^)]*\)<\/a><\/td><td class="col06">([\d.]+)<\/td><td class="col07">([\d,]+)<\/td>/g;
-  const holdings = [];
-  let m;
-  while ((m = rowRe.exec(html))) {
-    holdings.push({
-      code: m[1],
-      name: m[2],
-      weight: parseFloat(m[3]),
-      shares: parseInt(m[4].replace(/,/g, ''), 10),
-    });
-  }
-
-  return { code, name, asOf, holdings };
-}
 
 async function getAllHoldings() {
   if (cache.etfs.length && Date.now() - cache.time < CACHE_TTL_MS) return cache.etfs;

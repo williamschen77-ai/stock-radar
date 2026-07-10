@@ -166,6 +166,46 @@ function FlowBar({value,max,color}){
   const pct=max>0?Math.max(2,Math.min(100,(value/max)*100)):0;
   return(<div style={{flex:1,height:6,background:T.dim,borderRadius:3,overflow:"hidden"}}><div style={{width:`${pct}%`,height:"100%",background:color,borderRadius:3}}/></div>);
 }
+function EtfFlowGroup({title,color,items,metricLabel,metricKey}){
+  if(!items?.length)return null;
+  return(<div>
+    <div style={{fontSize:11,fontWeight:700,color,marginBottom:6}}>{title}</div>
+    <div style={{display:"flex",flexDirection:"column",gap:5}}>
+      {items.map(it=>(<div key={it.code} onClick={()=>it.onClick(it.code)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:T.card,border:`1px solid ${T.border}`,borderRadius:8,padding:"7px 11px",cursor:"pointer",fontSize:11}}>
+        <span><b>{it.name}</b> <span style={{color:T.muted,fontSize:10}}>{it.code}</span></span>
+        <span style={{color:T.muted,fontSize:10}}>{metricLabel}<b style={{color,marginLeft:3}}>{it[metricKey]}</b>{it.amountYi!=null?` · ${it.amountYi}億`:""}</span>
+      </div>))}
+    </div>
+  </div>);
+}
+function EtfFlowSection({days,onSelectStock}){
+  const [flow,setFlow]=useState(null);
+  const [loading,setLoading]=useState(true);
+
+  useEffect(()=>{
+    setLoading(true);
+    apiFetch(`/api/etf-flow?days=${days}`).then(setFlow).catch(()=>setFlow(null)).finally(()=>setLoading(false));
+  },[days]);
+
+  if(loading)return null;
+  if(!flow)return null;
+
+  return(<div style={{marginTop:8,paddingTop:14,borderTop:`1px solid ${T.border}`,display:"flex",flexDirection:"column",gap:10}}>
+    <div style={{fontSize:14,fontWeight:800}}>真實ETF逐檔持股變化 <span style={{fontSize:9,color:T.muted,fontWeight:400}}>（追蹤{flow.trackedEtfCount||15}檔主要ETF的每日真實持股，非彙總估算）</span></div>
+    {!flow.ok&&flow.reason==="kv_not_configured"&&<div style={{fontSize:10,color:T.muted}}>ⓘ 尚未啟用逐檔ETF歷史追蹤。</div>}
+    {!flow.ok&&flow.reason==="collecting"&&<div style={{fontSize:10,color:T.muted}}>ⓘ {flow.message}</div>}
+    {flow.ok&&(<>
+      <EtfFlowGroup title="共識買進（≥3檔ETF同時加碼）" color={T.buy} metricLabel="" metricKey="etfCount"
+        items={(flow.consensusBuy||[]).map(x=>({...x,onClick:onSelectStock}))}/>
+      <EtfFlowGroup title="集中加碼（估計金額≥3億）" color={T.yellow} metricLabel="" metricKey="etfCount"
+        items={(flow.concentrated||[]).map(x=>({...x,onClick:onSelectStock}))}/>
+      <EtfFlowGroup title="共識賣（≥3檔ETF同時減碼）" color={T.sell} metricLabel="" metricKey="etfCount"
+        items={(flow.consensusSell||[]).map(x=>({...x,onClick:onSelectStock}))}/>
+      {!flow.consensusBuy?.length&&!flow.concentrated?.length&&!flow.consensusSell?.length&&
+        <div style={{fontSize:10,color:T.muted}}>此窗口內尚無達到門檻的個股。</div>}
+    </>)}
+  </div>);
+}
 function FundFlowPage({onSelectStock}){
   const [days,setDays]=useState(5);
   const [data,setData]=useState([]);
@@ -187,7 +227,13 @@ function FundFlowPage({onSelectStock}){
 
   return(<div style={{padding:"12px 14px",display:"flex",flexDirection:"column",gap:10,maxWidth:820,margin:"0 auto"}}>
     <div>
-      <div style={{fontSize:18,fontWeight:900,marginBottom:3}}>近期資金流排行</div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:3,flexWrap:"wrap"}}>
+        <div style={{fontSize:18,fontWeight:900}}>近期資金流排行</div>
+        <a href="https://etfedge.xyz/" target="_blank" rel="noopener noreferrer"
+          style={{fontSize:10,color:T.accent,textDecoration:"none",border:`1px solid ${T.accent}40`,borderRadius:20,padding:"2px 9px",background:T.accentDim}}>
+          參考站點：ETF Edge ↗
+        </a>
+      </div>
       <div style={{fontSize:11,color:T.muted,lineHeight:1.6}}>看近期哪些個股被投信（含ETF發行商）集中買超，切換天數可看短線到較長一點的追蹤結果。</div>
     </div>
     <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
@@ -212,6 +258,7 @@ function FundFlowPage({onSelectStock}){
         </div>
       </div>
     ))}
+    <EtfFlowSection days={days} onSelectStock={onSelectStock}/>
   </div>);
 }
 
