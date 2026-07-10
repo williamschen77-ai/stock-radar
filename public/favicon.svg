@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="8" fill="#0b0f14"/>
+  <circle cx="16" cy="16" r="13" fill="#3d9bd418" stroke="#3d9bd4" stroke-width="1.5"/>
+  <text x="16" y="21" text-anchor="middle" fill="#3d9bd4" font-size="13" font-weight="700" font-family="system-ui">個</text>
+</svg>
