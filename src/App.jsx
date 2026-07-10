@@ -160,6 +160,61 @@ function SearchBox({onSelect}){
   </div>);
 }
 
+// ── Fund Flow ranking (market-wide 投信 accumulation leaderboard) ──
+const FLOW_WINDOWS=[{label:"5日",days:5},{label:"10日",days:10},{label:"20日",days:20}];
+function FlowBar({value,max,color}){
+  const pct=max>0?Math.max(2,Math.min(100,(value/max)*100)):0;
+  return(<div style={{flex:1,height:6,background:T.dim,borderRadius:3,overflow:"hidden"}}><div style={{width:`${pct}%`,height:"100%",background:color,borderRadius:3}}/></div>);
+}
+function FundFlowPage({onSelectStock}){
+  const [days,setDays]=useState(5);
+  const [data,setData]=useState([]);
+  const [asOf,setAsOf]=useState(null);
+  const [note,setNote]=useState("");
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState("");
+
+  useEffect(()=>{
+    setLoading(true);setErr("");
+    apiFetch(`/api/fund-flow?days=${days}&limit=20`)
+      .then(d=>{setData(d.data||[]);setAsOf(d.asOf||null);setNote(d.note||"");if(!d.data?.length)setErr("暫無資料");})
+      .catch(()=>setErr("載入失敗，請稍後再試"))
+      .finally(()=>setLoading(false));
+  },[days]);
+
+  const maxAmount=Math.max(1,...data.map(d=>d.amountYi||0));
+  const maxLots=Math.max(1,...data.map(d=>d.netLots||0));
+
+  return(<div style={{padding:"12px 14px",display:"flex",flexDirection:"column",gap:10,maxWidth:820,margin:"0 auto"}}>
+    <div>
+      <div style={{fontSize:18,fontWeight:900,marginBottom:3}}>近期資金流排行</div>
+      <div style={{fontSize:11,color:T.muted,lineHeight:1.6}}>看近期哪些個股被投信（含ETF發行商）集中買超，切換天數可看短線到較長一點的追蹤結果。</div>
+    </div>
+    <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+      {FLOW_WINDOWS.map(w=>(<button key={w.days} onClick={()=>setDays(w.days)}
+        style={{background:days===w.days?T.accentDim:T.card,border:`1px solid ${days===w.days?T.accent+"80":T.border}`,color:days===w.days?T.accent:T.muted,borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:days===w.days?700:400}}>{w.label}</button>))}
+      {asOf&&<span style={{marginLeft:"auto",fontSize:10,color:T.muted}}>as of {asOf}</span>}
+    </div>
+    {note&&<div style={{fontSize:9,color:T.muted,background:T.card,border:`1px solid ${T.border}`,borderRadius:8,padding:"7px 10px"}}>ⓘ {note}</div>}
+    {loading&&<div style={{padding:30,textAlign:"center",color:T.muted}}>⏳ 載入中…</div>}
+    {!loading&&err&&<div style={{padding:30,textAlign:"center",color:T.muted}}>{err}</div>}
+    {!loading&&!err&&data.map((d,i)=>(
+      <div key={d.code} onClick={()=>onSelectStock(d.code)}
+        style={{background:T.card,borderRadius:10,border:`1px solid ${T.border}`,padding:"12px 16px",cursor:"pointer"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
+          <div style={{fontSize:14,fontWeight:800}}>{i+1}. {getStockName(d.code)||d.name} <span style={{color:T.muted,fontSize:11,fontWeight:400}}>{d.code}</span></div>
+          <div style={{fontSize:16,fontWeight:900,color:T.yellow}}>{d.amountYi!=null?`${d.amountYi}億`:"—"}</div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,fontSize:10}}><span style={{width:52,color:T.muted}}>買超張數</span><FlowBar value={d.netLots} max={maxLots} color={T.accent}/><span style={{width:64,textAlign:"right"}}>{d.netLots?.toLocaleString()}張</span></div>
+          <div style={{display:"flex",alignItems:"center",gap:8,fontSize:10}}><span style={{width:52,color:T.muted}}>買超天數</span><FlowBar value={d.buyDays} max={d.windowDays||days} color={T.buy}/><span style={{width:64,textAlign:"right"}}>{d.buyDays}/{d.windowDays||days}日</span></div>
+          <div style={{display:"flex",alignItems:"center",gap:8,fontSize:10}}><span style={{width:52,color:T.muted}}>連續買超</span><FlowBar value={d.streak} max={d.windowDays||days} color={T.purple}/><span style={{width:64,textAlign:"right"}}>{d.streak}日</span></div>
+        </div>
+      </div>
+    ))}
+  </div>);
+}
+
 // ── Visitor counter ────────────────────────────────────────────
 function VisitorCount(){
   const [data,setData]=useState(null);
@@ -191,6 +246,7 @@ const MA_OPT=[{key:"ma5",label:"MA5",color:T.ma.ma5},{key:"ma20",label:"MA20",co
 const RANGE_OPT=[{label:"1月",range:"1mo"},{label:"3月",range:"3mo"},{label:"6月",range:"6mo"},{label:"1年",range:"1y"},{label:"2年",range:"2y"}];
 
 export default function App(){
+  const [view,setView]=useState("stock");
   const [stockCode,setStockCode]=useState("2330");
   const [tab,setTab]=useState("kline");
   const [range,setRange]=useState("6mo");
@@ -247,7 +303,7 @@ export default function App(){
   const chg=quote?+(quote.price-quote.prev).toFixed(2):0;
   const chgPct=quote?+((chg/quote.prev)*100).toFixed(2):0;
   const latestMA={};MA_OPT.forEach(m=>{const a=maLines[m.key];if(a)latestMA[m.key]=a.slice().reverse().find(v=>v!=null);});
-  function selectStock(code){setStockCode(code.toUpperCase().trim());setTab("kline");setAdvice(null);}
+  function selectStock(code){setStockCode(code.toUpperCase().trim());setTab("kline");setAdvice(null);setView("stock");}
   const C=(ch,sx={})=><div style={{background:T.card,borderRadius:10,border:`1px solid ${T.border}`,padding:"11px 13px",...sx}}>{ch}</div>;
 
   return(
@@ -259,11 +315,15 @@ export default function App(){
           <div style={{width:26,height:26,borderRadius:7,background:T.accentDim,border:`1px solid ${T.accent}40`,display:"grid",placeItems:"center",fontSize:12,fontWeight:900,color:T.accent}}>個</div>
           <span style={{fontWeight:800,fontSize:15}}>個股透視</span>
         </div>
-        <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+        <div style={{display:"flex",gap:4,background:T.card,border:`1px solid ${T.border}`,borderRadius:7,padding:2}}>
+          <button onClick={()=>setView("stock")} style={{background:view==="stock"?T.accentDim:"none",border:"none",color:view==="stock"?T.accent:T.muted,borderRadius:5,padding:"4px 10px",cursor:"pointer",fontSize:11,fontWeight:view==="stock"?700:400}}>個股</button>
+          <button onClick={()=>setView("flow")} style={{background:view==="flow"?T.accentDim:"none",border:"none",color:view==="flow"?T.accent:T.muted,borderRadius:5,padding:"4px 10px",cursor:"pointer",fontSize:11,fontWeight:view==="flow"?700:400}}>資金流排行</button>
+        </div>
+        {view==="stock"&&<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
           {POPULAR.map(c=>(<button key={c} onClick={()=>selectStock(c)}
             style={{background:c===stockCode?T.accentDim:"none",border:`1px solid ${c===stockCode?T.accent+"80":T.border}`,color:c===stockCode?T.accent:T.muted,borderRadius:5,padding:"3px 8px",cursor:"pointer",fontSize:10,fontWeight:c===stockCode?700:400}}>
             {getStockName(c)||c}</button>))}
-        </div>
+        </div>}
         <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
           <VisitorCount/>
           {quote&&<button onClick={()=>toggleFav(stockCode)} title={isFav(stockCode)?"從最愛移除":"加入最愛"}
@@ -273,6 +333,9 @@ export default function App(){
         </div>
       </header>
 
+      {view==="flow"&&<FundFlowPage onSelectStock={selectStock}/>}
+
+      {view==="stock"&&<>
       <FavBar favs={favs} current={stockCode} onSelect={selectStock} onRemove={toggleFav}/>
 
       {(disposition.isDisposed||disposition.nearLock)&&(
@@ -475,6 +538,7 @@ export default function App(){
         </div>)}
 
       </main>
+      </>}
     </div>
   );
 }

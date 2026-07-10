@@ -34,7 +34,10 @@ export default async function handler(req, res) {
       low:   q.low[i]    != null ? +q.low[i].toFixed(2)   : null,
       close: q.close[i]  != null ? +q.close[i].toFixed(2) : null,
       vol:   q.volume[i] || 0,
-    })).filter(c => c.close !== null);
+    // Yahoo sometimes appends a placeholder candle for the in-progress trading
+    // day (open=high=low=close, vol=0) before real data lands — drop it so it
+    // doesn't masquerade as a real "no change today" data point.
+    })).filter(c => c.close !== null && c.vol > 0);
 
     if (!candles.length) return res.status(404).json({ error: 'No data' });
 
