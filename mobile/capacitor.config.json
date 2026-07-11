@@ -1,0 +1,12 @@
+{
+  "appId": "com.williamschen.stockradar",
+  "appName": "Stock Radar",
+  "webDir": "../dist",
+  "bundledWebRuntime": false,
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_radar",
+      "iconColor": "#22d3a0"
+    }
+  }
+}

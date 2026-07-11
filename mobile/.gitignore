@@ -1,0 +1,7 @@
+node_modules/
+.env
+ios/App/App/public/
+ios/App/Pods/
+android/.gradle/
+android/app/build/
+android/app/src/main/assets/public/

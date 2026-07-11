@@ -1,0 +1,27 @@
+{
+  "name": "stock-radar-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:web": "node scripts/build-web.mjs",
+    "sync": "npm run build:web && npx cap sync",
+    "ios:add": "npx cap add ios",
+    "android:add": "npx cap add android",
+    "ios:open": "npx cap open ios",
+    "android:open": "npx cap open android",
+    "assets": "npx capacitor-assets generate --ios --android --iconBackgroundColor=#06172C",
+    "ios:prepare": "node scripts/prepare-ios.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
+    "@capacitor/ios": "^7.4.3",
+    "@capacitor/local-notifications": "^7.0.2",
+    "@capacitor/share": "^7.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^7.4.3"
+  }
+}

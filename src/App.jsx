@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { STOCK_MAP, getStockName, getStockInfo } from "./stockList.js";
+import { isNativeApp, schedulePriceAlert, shareStock } from "./nativeBridge.js";
 
 const T = {
   bg:"#090e13",surface:"#0f1820",card:"#141f2c",border:"#1a2c3d",borderLit:"#2a4560",
@@ -18,8 +19,10 @@ function useFavourites() {
 }
 
 // ── API ────────────────────────────────────────────────────────
-const apiFetch=url=>fetch(url).then(r=>r.ok?r.json():Promise.reject(r.status));
-const apiPost=(url,body)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+const API_ORIGIN=(import.meta.env.VITE_API_ORIGIN||"").replace(/\/$/,"");
+const apiUrl=url=>`${API_ORIGIN}${url}`;
+const apiFetch=url=>fetch(apiUrl(url)).then(r=>r.ok?r.json():Promise.reject(r.status));
+const apiPost=(url,body)=>fetch(apiUrl(url),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
 
 async function fetchStockData(code,range){
   const [q,inst,etf,disp,news]=await Promise.allSettled([
@@ -337,6 +340,17 @@ function VisitorCount(){
   </div>);
 }
 
+function NativeAppActions({name,code,quote}){
+  const [message,setMessage]=useState("");
+  if(!isNativeApp()||!quote)return null;
+  const nextClose=new Date();nextClose.setDate(nextClose.getDate()+1);nextClose.setHours(13,40,0,0);
+  return(<div style={{display:"flex",gap:5,alignItems:"center"}}>
+    <button onClick={()=>shareStock({name,code,price:quote.price,url:""}).catch(()=>setMessage("分享未完成"))} style={{background:T.card,border:`1px solid ${T.border}`,color:T.accent,borderRadius:6,padding:"4px 7px",cursor:"pointer",fontSize:10}}>分享</button>
+    <button onClick={()=>schedulePriceAlert({name,code,body:`明日盤後查看 ${name} 最新報價與 ETF 持股變化`,at:nextClose}).then(ok=>setMessage(ok?"已設定明日提醒":"提醒功能尚未啟用")).catch(()=>setMessage("提醒設定失敗"))} style={{background:T.card,border:`1px solid ${T.border}`,color:T.buy,borderRadius:6,padding:"4px 7px",cursor:"pointer",fontSize:10}}>提醒</button>
+    {message&&<span style={{fontSize:9,color:T.muted}}>{message}</span>}
+  </div>);
+}
+
 // ── Favourites bar ─────────────────────────────────────────────
 function FavBar({favs,current,onSelect,onRemove}){
   if(!favs.length)return null;
@@ -438,6 +452,7 @@ export default function App(){
         </div>}
         <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
           <VisitorCount/>
+          <NativeAppActions name={displayName} code={stockCode} quote={quote}/>
           {quote&&<button onClick={()=>toggleFav(stockCode)} title={isFav(stockCode)?"從最愛移除":"加入最愛"}
             style={{background:isFav(stockCode)?T.yellow+"22":"none",border:`1px solid ${isFav(stockCode)?T.yellow+"80":T.border}`,color:isFav(stockCode)?T.yellow:T.muted,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:14}}>
             {isFav(stockCode)?"★":"☆"}</button>}
