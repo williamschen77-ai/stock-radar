@@ -69,7 +69,8 @@ function useSearch(){
     if(timer.current)clearTimeout(timer.current);
     if(!q.trim()){setResults([]);return;}
     // instant local results from STOCK_MAP
-    const local=Object.entries(STOCK_MAP).filter(([code,v])=>code.startsWith(q)||v.name.includes(q)||v.sector?.includes(q)).slice(0,5).map(([code,v])=>({code,...v}));
+    const ql=q.toLowerCase();
+    const local=Object.entries(STOCK_MAP).filter(([code,v])=>code.toLowerCase().startsWith(ql)||v.name.includes(q)||v.sector?.includes(q)).slice(0,8).map(([code,v])=>({code,...v,kind:v.sector==="ETF"?"ETF":"STOCK"}));
     setResults(local);
     // then fetch from API for full database
     timer.current=setTimeout(async()=>{
@@ -78,7 +79,7 @@ function useSearch(){
         if(d?.data?.length){
           // merge: API results first, then local-only
           const apiCodes=new Set(d.data.map(r=>r.code));
-          const merged=[...d.data,...local.filter(r=>!apiCodes.has(r.code))].slice(0,10);
+          const merged=[...d.data,...local.filter(r=>!apiCodes.has(r.code))].slice(0,20);
           setResults(merged);
         }
       }catch(_){}
@@ -156,7 +157,7 @@ function SearchBox({onSelect}){
       {results.map(r=>(<div key={r.code} onMouseDown={()=>pick(r.code)}
         style={{padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${T.border}22`,display:"flex",justifyContent:"space-between",alignItems:"center"}}
         onMouseEnter={e=>e.currentTarget.style.background=T.accentDim} onMouseLeave={e=>e.currentTarget.style.background="none"}>
-        <div><span style={{fontWeight:700,fontSize:12}}>{r.name}</span><span style={{color:T.muted,fontSize:10,marginLeft:5}}>{r.sector||r.industry_category}</span></div>
+        <div><span style={{fontWeight:700,fontSize:12}}>{r.name}</span><span style={{color:r.kind==="ETF"?T.purple:T.muted,fontSize:10,marginLeft:5}}>{r.active?"主動ETF":r.kind==="ETF"?"ETF":(r.sector||r.industry_category)}</span></div>
         <span style={{color:T.muted,fontSize:11}}>{r.code}</span>
       </div>))}
     </div>)}
