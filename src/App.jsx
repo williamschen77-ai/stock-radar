@@ -253,9 +253,19 @@ function EtfTargetRanking({days,onSelectStock}){
 }
 
 function ActiveEtfUniverse({onSelectStock}){
-  const [etfs,setEtfs]=useState([]);const [loading,setLoading]=useState(true);
-  useEffect(()=>{apiFetch('/api/active-etfs').then(data=>setEtfs(data.data||[])).catch(()=>setEtfs([])).finally(()=>setLoading(false));},[]);
-  return(<div style={{padding:"14px",maxWidth:1080,margin:"0 auto"}}><div style={{marginBottom:12}}><div style={{fontSize:20,fontWeight:900}}>台灣主動ETF研究台</div><div style={{fontSize:11,color:T.muted,marginTop:4}}>即時主動ETF持股宇宙；持股變化與共識訊號由每日盤後快照累積。</div></div>{loading?<div style={{padding:28,textAlign:"center",color:T.muted}}>載入主動ETF資料…</div>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:9}}>{etfs.map(etf=>(<div key={etf.code} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:10,padding:"11px"}}><div style={{display:"flex",justifyContent:"space-between",gap:6}}><b>{etf.name}</b><span style={{fontSize:10,color:T.accent}}>{etf.code}</span></div><div style={{fontSize:9,color:T.muted,margin:"4px 0 8px"}}>資料日 {etf.asOf||"—"} · {etf.holdingsCount} 檔持股</div>{etf.topHoldings.map(holding=>(<button key={holding.code} onClick={()=>onSelectStock(holding.code)} style={{display:"flex",width:"100%",justifyContent:"space-between",background:"none",border:"none",color:T.text,padding:"3px 0",cursor:"pointer",fontSize:10}}><span>{holding.name} <span style={{color:T.muted}}>{holding.code}</span></span><span style={{color:T.buy}}>{holding.weight.toFixed(2)}%</span></button>))}</div>))}</div>}</div>);
+  const [etfs,setEtfs]=useState([]);const [status,setStatus]=useState(null);const [loading,setLoading]=useState(true);
+  useEffect(()=>{
+    Promise.allSettled([apiFetch('/api/active-etfs'),apiFetch('/api/etf-status')]).then(([list,tracking])=>{
+      if(list.status==='fulfilled')setEtfs(list.value.data||[]);
+      if(tracking.status==='fulfilled')setStatus(tracking.value);
+    }).finally(()=>setLoading(false));
+  },[]);
+  const statusColor=status?.kvConnected?(status.maxSnapshots>=2?T.buy:T.yellow):T.sell;
+  const statusText=!status?"讀取追蹤狀態…":!status.kvConnected?"KV 尚未連接":status.maxSnapshots<2?`資料累積中：${status.maxSnapshots} 個揭露日`:`快照運作中：${status.maxSnapshots} 個揭露日`;
+  return(<div style={{padding:"14px",maxWidth:1080,margin:"0 auto"}}>
+    <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"start",marginBottom:12,flexWrap:"wrap"}}><div><div style={{fontSize:20,fontWeight:900}}>台灣主動ETF研究台</div><div style={{fontSize:11,color:T.muted,marginTop:4}}>即時主動ETF持股宇宙；持股變化與共識訊號由每日盤後快照累積。</div></div><div style={{background:statusColor+"18",border:`1px solid ${statusColor}55`,borderRadius:8,padding:"7px 10px",fontSize:10,color:statusColor}}><b>{statusText}</b>{status?.latestSnapshot&&<div style={{fontWeight:400,marginTop:2}}>最新快照 {status.latestSnapshot} · {status.coveredEtfCount}/{status.trackedEtfCount} 檔</div>}</div></div>
+    {loading?<div style={{padding:28,textAlign:"center",color:T.muted}}>載入主動ETF資料…</div>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:9}}>{etfs.map(etf=>(<div key={etf.code} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:10,padding:"11px"}}><div style={{display:"flex",justifyContent:"space-between",gap:6}}><b>{etf.name}</b><span style={{fontSize:10,color:T.accent}}>{etf.code}</span></div><div style={{fontSize:9,color:T.muted,margin:"4px 0 8px"}}>資料日 {etf.asOf||"—"} · {etf.holdingsCount} 檔持股</div>{etf.topHoldings.map(holding=>(<button key={holding.code} onClick={()=>onSelectStock(holding.code)} style={{display:"flex",width:"100%",justifyContent:"space-between",background:"none",border:"none",color:T.text,padding:"3px 0",cursor:"pointer",fontSize:10}}><span>{holding.name} <span style={{color:T.muted}}>{holding.code}</span></span><span style={{color:T.buy}}>{holding.weight.toFixed(2)}%</span></button>))}</div>))}</div>}
+  </div>);
 }
 
 function FundFlowPage({onSelectStock}){
