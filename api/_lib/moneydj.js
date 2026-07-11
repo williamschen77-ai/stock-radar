@@ -27,6 +27,14 @@ export async function fetchEtfHoldings(code) {
 
   // ETF and constituent ids can contain an A suffix (active ETF).  MoneyDJ
   // still uses the same table layout for those pages.
+  // Some active ETFs (e.g. global/AI-themed ones) also hold foreign stocks
+  // (GOOGL.US, NVDA.US, ...). We only track TW/TWO-listed holdings here since
+  // this app has no quote/chart pipeline for non-Taiwan tickers — but we still
+  // count every row so callers can report an honest "X of Y holdings tracked"
+  // instead of silently implying the fund only holds a couple of stocks.
+  const totalRowRe = /class="col05"/g;
+  const totalRows = (html.match(totalRowRe) || []).length;
+
   const rowRe = /etfid=([0-9A-Z]+)\.(?:TW|TWO)[^']*'>([^(<]+)\([^)]*\)<\/a><\/td><td class="col06">([\d.]+)<\/td><td class="col07">([\d,]+)<\/td>/g;
   const holdings = [];
   let m;
@@ -39,5 +47,5 @@ export async function fetchEtfHoldings(code) {
     });
   }
 
-  return { code, name, asOf, holdings };
+  return { code, name, asOf, holdings, totalRows };
 }

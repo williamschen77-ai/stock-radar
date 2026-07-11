@@ -170,14 +170,24 @@ function FlowBar({value,max,color}){
   const pct=max>0?Math.max(2,Math.min(100,(value/max)*100)):0;
   return(<div style={{flex:1,height:6,background:T.dim,borderRadius:3,overflow:"hidden"}}><div style={{width:`${pct}%`,height:"100%",background:color,borderRadius:3}}/></div>);
 }
-function EtfFlowGroup({title,color,items,metricLabel,metricKey}){
+function TargetFlowTimeline({items=[]}){
+  if(!items.length)return null;
+  const max=Math.max(1,...items.map(item=>Math.abs(item.netNtd||0)));
+  const fmt=value=>value==null?"—":`${(value/1e8).toFixed(1)}億`;
+  return(<div style={{marginTop:12,borderTop:`1px solid ${T.border}`,paddingTop:9}}>
+    <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:T.muted,marginBottom:7}}><span>資金流時間軸</span><span>每日快照淨變動</span></div>
+    <div style={{display:"flex",alignItems:"end",gap:5,height:86}}>{items.slice(-10).map(item=>{const positive=(item.netNtd||0)>=0;const h=Math.max(5,Math.round(Math.abs(item.netNtd||0)/max*58));return(<div key={item.date} title={`${item.date} ${fmt(item.netNtd)} · ${item.etfCount} 檔ETF`} style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"end",height:"100%"}}><span style={{fontSize:8,color:positive?T.buy:T.sell,whiteSpace:"nowrap",marginBottom:3}}>{item.etfCount}</span><div style={{height:h,width:"100%",maxWidth:18,background:positive?T.buy:T.sell,borderRadius:"3px 3px 0 0",opacity:.85}}/><span style={{fontSize:8,color:T.muted,marginTop:4}}>{item.date?.slice(5)}</span></div>);})}</div>
+    <div style={{fontSize:9,color:T.muted,marginTop:5}}>柱高：相對淨加減碼金額；數字：當日參與加碼的主動ETF數。</div>
+  </div>);
+}
+function EtfFlowGroup({title,color,items,metricKey,ntdKey}){
   if(!items?.length)return null;
   return(<div>
     <div style={{fontSize:11,fontWeight:700,color,marginBottom:6}}>{title}</div>
     <div style={{display:"flex",flexDirection:"column",gap:5}}>
       {items.map(it=>(<div key={it.code} onClick={()=>it.onClick(it.code)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:T.card,border:`1px solid ${T.border}`,borderRadius:8,padding:"7px 11px",cursor:"pointer",fontSize:11}}>
         <span><b>{it.name}</b> <span style={{color:T.muted,fontSize:10}}>{it.code}</span></span>
-        <span style={{color:T.muted,fontSize:10}}>{metricLabel}<b style={{color,marginLeft:3}}>{it[metricKey]}</b>{it.amountYi!=null?` · ${it.amountYi}億`:""}</span>
+        <span style={{color:T.muted,fontSize:10}}><b style={{color}}>{it[metricKey]}</b>檔{it[ntdKey]!=null?` · ${(Math.abs(it[ntdKey])/1e8).toFixed(1)}億`:""}</span>
       </div>))}
     </div>
   </div>);
@@ -193,21 +203,15 @@ function EtfFlowSection({days,onSelectStock}){
 
   if(loading)return null;
   if(!flow)return null;
+  // 買進側（共識買進/集中加碼）已由上方 EtfTargetRanking 用同一份 API 資料呈現，
+  // 這裡只保留賣出側，避免同一份資料在頁面上重複兩次。
+  if(flow.ok&&!flow.consensusSell?.length)return null;
 
   return(<div style={{marginTop:8,paddingTop:14,borderTop:`1px solid ${T.border}`,display:"flex",flexDirection:"column",gap:10}}>
-    <div style={{fontSize:14,fontWeight:800}}>真實ETF逐檔持股變化 <span style={{fontSize:9,color:T.muted,fontWeight:400}}>（追蹤{flow.trackedEtfCount||15}檔主要ETF的每日真實持股，非彙總估算）</span></div>
     {!flow.ok&&flow.reason==="kv_not_configured"&&<div style={{fontSize:10,color:T.muted}}>ⓘ 尚未啟用逐檔ETF歷史追蹤。</div>}
     {!flow.ok&&flow.reason==="collecting"&&<div style={{fontSize:10,color:T.muted}}>ⓘ {flow.message}</div>}
-    {flow.ok&&(<>
-      <EtfFlowGroup title="共識買進（≥3檔ETF同時加碼）" color={T.buy} metricLabel="" metricKey="etfCount"
-        items={(flow.consensusBuy||[]).map(x=>({...x,onClick:onSelectStock}))}/>
-      <EtfFlowGroup title="集中加碼（估計金額≥3億）" color={T.yellow} metricLabel="" metricKey="etfCount"
-        items={(flow.concentrated||[]).map(x=>({...x,onClick:onSelectStock}))}/>
-      <EtfFlowGroup title="共識賣（≥3檔ETF同時減碼）" color={T.sell} metricLabel="" metricKey="etfCount"
-        items={(flow.consensusSell||[]).map(x=>({...x,onClick:onSelectStock}))}/>
-      {!flow.consensusBuy?.length&&!flow.concentrated?.length&&!flow.consensusSell?.length&&
-        <div style={{fontSize:10,color:T.muted}}>此窗口內尚無達到門檻的個股。</div>}
-    </>)}
+    {flow.ok&&<EtfFlowGroup title="共識減碼（≥3檔主動ETF同時減碼）" color={T.sell} metricKey="sellEtfCount" ntdKey="netNtd"
+      items={(flow.consensusSell||[]).map(x=>({...x,onClick:onSelectStock}))}/>}
   </div>);
 }
 function EtfTargetRanking({days,onSelectStock}){
@@ -249,6 +253,7 @@ function EtfTargetRanking({days,onSelectStock}){
           <div style={{margin:"10px 0",display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}><div style={{background:T.surface,padding:"7px",borderRadius:7}}><div style={{fontSize:9,color:T.muted}}>絕對加碼</div><div style={{fontWeight:900,color:T.buy,marginTop:2}}>{formatNtd(target.buyNtd)}</div></div><div style={{background:T.surface,padding:"7px",borderRadius:7}}><div style={{fontSize:9,color:T.muted}}>淨變動</div><div style={{fontWeight:900,marginTop:2,color:(target.netNtd||0)>=0?T.buy:T.sell}}>{formatNtd(target.netNtd)}</div></div></div>
           <div style={{fontSize:10,color:T.muted,marginBottom:6}}>加碼 ETF 明細</div>
           <div style={{display:"flex",flexDirection:"column",gap:6}}>{target.buyers.map(buyer=>(<div key={buyer.etfCode} style={{display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"center",fontSize:11}}><div><b>{buyer.etfName}</b><span style={{color:T.muted,marginLeft:4}}>{buyer.etfCode}</span><div style={{fontSize:9,color:T.muted,marginTop:2}}>權重 {buyer.startWeight.toFixed(2)}% → {buyer.endWeight.toFixed(2)}% ({buyer.weightDelta>0?"+":""}{buyer.weightDelta.toFixed(2)}%)</div></div><div style={{color:T.buy,fontWeight:800,textAlign:"right"}}>{formatNtd(buyer.buyNtd)}</div></div>))}</div>
+          <TargetFlowTimeline items={target.timeline}/>
         </div>}
       </div>
       {!targets.length&&<div style={{padding:18,textAlign:"center",fontSize:11,color:T.muted}}>已有快照，但本期間沒有可列出的主動ETF加碼標的。</div>}
@@ -256,19 +261,28 @@ function EtfTargetRanking({days,onSelectStock}){
   </div>);
 }
 
+function holdingsLabel(etf){
+  const total=etf.totalHoldingsCount??etf.holdingsCount;
+  if(!total||total<=etf.holdingsCount)return`${etf.holdingsCount} 檔持股`;
+  return`${etf.holdingsCount}／${total} 檔台股（其餘為海外持股，暫不列入）`;
+}
 function ActiveEtfUniverse({onSelectStock}){
-  const [etfs,setEtfs]=useState([]);const [status,setStatus]=useState(null);const [loading,setLoading]=useState(true);
+  const [etfs,setEtfs]=useState([]),[status,setStatus]=useState(null),[loading,setLoading]=useState(true);
+  const [selectedCode,setSelectedCode]=useState(null),[detail,setDetail]=useState(null),[detailLoading,setDetailLoading]=useState(false);
   useEffect(()=>{
     Promise.allSettled([apiFetch('/api/etf-flow?view=universe'),apiFetch('/api/etf-flow?view=status')]).then(([list,tracking])=>{
       if(list.status==='fulfilled')setEtfs(list.value.data||[]);
       if(tracking.status==='fulfilled')setStatus(tracking.value);
     }).finally(()=>setLoading(false));
   },[]);
+  useEffect(()=>{if(!selectedCode){setDetail(null);return;}setDetailLoading(true);apiFetch(`/api/etf-flow?view=etf&code=${selectedCode}`).then(setDetail).catch(()=>setDetail(null)).finally(()=>setDetailLoading(false));},[selectedCode]);
   const statusColor=status?.kvConnected?(status.maxSnapshots>=2?T.buy:T.yellow):T.sell;
   const statusText=!status?"讀取追蹤狀態…":!status.kvConnected?"KV 尚未連接":status.maxSnapshots<2?`資料累積中：${status.maxSnapshots} 個揭露日`:`快照運作中：${status.maxSnapshots} 個揭露日`;
+  const actionMeta={NEW:["新增",T.buy],ADD:["加碼",T.buy],REDUCE:["減碼",T.sell],EXIT:["移除",T.sell]};
   return(<div style={{padding:"14px",maxWidth:1080,margin:"0 auto"}}>
-    <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"start",marginBottom:12,flexWrap:"wrap"}}><div><div style={{fontSize:20,fontWeight:900}}>台灣主動ETF研究台</div><div style={{fontSize:11,color:T.muted,marginTop:4}}>即時主動ETF持股宇宙；持股變化與共識訊號由每日盤後快照累積。</div></div><div style={{background:statusColor+"18",border:`1px solid ${statusColor}55`,borderRadius:8,padding:"7px 10px",fontSize:10,color:statusColor}}><b>{statusText}</b>{status?.latestSnapshot&&<div style={{fontWeight:400,marginTop:2}}>最新快照 {status.latestSnapshot} · {status.coveredEtfCount}/{status.trackedEtfCount} 檔</div>}</div></div>
-    {loading?<div style={{padding:28,textAlign:"center",color:T.muted}}>載入主動ETF資料…</div>:<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:9}}>{etfs.map(etf=>(<div key={etf.code} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:10,padding:"11px"}}><div style={{display:"flex",justifyContent:"space-between",gap:6}}><b>{etf.name}</b><span style={{fontSize:10,color:T.accent}}>{etf.code}</span></div><div style={{fontSize:9,color:T.muted,margin:"4px 0 8px"}}>資料日 {etf.asOf||"—"} · {etf.holdingsCount} 檔持股</div>{etf.topHoldings.map(holding=>(<button key={holding.code} onClick={()=>onSelectStock(holding.code)} style={{display:"flex",width:"100%",justifyContent:"space-between",background:"none",border:"none",color:T.text,padding:"3px 0",cursor:"pointer",fontSize:10}}><span>{holding.name} <span style={{color:T.muted}}>{holding.code}</span></span><span style={{color:T.buy}}>{holding.weight.toFixed(2)}%</span></button>))}</div>))}</div>}
+    <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"start",marginBottom:12,flexWrap:"wrap"}}><div><div style={{fontSize:20,fontWeight:900}}>台灣主動ETF研究台</div><div style={{fontSize:11,color:T.muted,marginTop:4}}>即時主動ETF持股宇宙；點選 ETF 可查看持股、最新新增、加碼、減碼與移除標的。</div></div><div style={{background:statusColor+"18",border:`1px solid ${statusColor}55`,borderRadius:8,padding:"7px 10px",fontSize:10,color:statusColor}}><b>{statusText}</b>{status?.latestSnapshot&&<div style={{fontWeight:400,marginTop:2}}>最新快照 {status.latestSnapshot} · {status.coveredEtfCount}/{status.trackedEtfCount} 檔</div>}</div></div>
+    {loading?<div style={{padding:28,textAlign:"center",color:T.muted}}>載入主動ETF資料…</div>:<><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:9}}>{etfs.map(etf=>(<div key={etf.code} style={{background:selectedCode===etf.code?T.accentDim:T.card,border:`1px solid ${selectedCode===etf.code?T.accent+"80":T.border}`,borderRadius:10,padding:"11px"}}><div style={{display:"flex",justifyContent:"space-between",gap:6,alignItems:"start"}}><b>{etf.name}</b><button onClick={()=>setSelectedCode(etf.code)} style={{background:"none",border:"none",color:T.accent,cursor:"pointer",fontSize:10,padding:0}}>{etf.code} · 詳情</button></div><div style={{fontSize:9,color:T.muted,margin:"4px 0 8px"}}>資料日 {etf.asOf||"—"} · {holdingsLabel(etf)}</div>{etf.topHoldings.map(holding=>(<button key={holding.code} onClick={()=>onSelectStock(holding.code)} style={{display:"flex",width:"100%",justifyContent:"space-between",background:"none",border:"none",color:T.text,padding:"3px 0",cursor:"pointer",fontSize:10}}><span>{holding.name} <span style={{color:T.muted}}>{holding.code}</span></span><span style={{color:T.buy}}>{holding.weight.toFixed(2)}%</span></button>))}</div>))}</div>
+    {selectedCode&&<div style={{marginTop:12,background:T.card,border:`1px solid ${T.border}`,borderRadius:10,padding:"13px"}}>{detailLoading?<div style={{color:T.muted,padding:12}}>載入 ETF 詳情…</div>:detail?<><div style={{display:"flex",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}><div><div style={{fontSize:17,fontWeight:900}}>{detail.name}</div><div style={{fontSize:10,color:T.muted,marginTop:3}}>{detail.code} · {holdingsLabel(detail)} · 資料日 {detail.asOf||"—"}</div></div><span style={{fontSize:10,color:T.muted}}>已累積 {detail.snapshotCount} 個快照</span></div><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(210px,1fr))",gap:12,marginTop:12}}><div><div style={{fontSize:10,color:T.muted,marginBottom:6}}>主要持股</div>{detail.holdings.slice(0,12).map(holding=>(<button key={holding.code} onClick={()=>onSelectStock(holding.code)} style={{display:"flex",justifyContent:"space-between",width:"100%",background:"none",border:"none",color:T.text,padding:"4px 0",cursor:"pointer",fontSize:11}}><span>{holding.name} <small style={{color:T.muted}}>{holding.code}</small></span><b style={{color:T.accent}}>{holding.weight.toFixed(2)}%</b></button>))}</div><div><div style={{fontSize:10,color:T.muted,marginBottom:6}}>最近快照異動</div>{detail.changes.length?detail.changes.map(change=>{const [label,color]=actionMeta[change.action]||[change.action,T.muted];return(<button key={change.code} onClick={()=>onSelectStock(change.code)} style={{display:"grid",gridTemplateColumns:"42px 1fr auto",gap:6,alignItems:"center",width:"100%",background:"none",border:"none",color:T.text,padding:"4px 0",cursor:"pointer",fontSize:11}}><b style={{color}}>{label}</b><span>{change.name} <small style={{color:T.muted}}>{change.code}</small></span><span style={{color}}>{change.weightDelta>0?"+":""}{change.weightDelta.toFixed(2)}%</span></button>)}):<div style={{fontSize:11,color:T.muted,padding:"8px 0"}}>累積兩個揭露日後，會在此顯示逐檔異動。</div>}</div></div></>:<div style={{color:T.muted}}>ETF 詳情暫時無法載入。</div>}</div>}</>}
   </div>);
 }
 
@@ -308,6 +322,7 @@ function FundFlowPage({onSelectStock}){
       {asOf&&<span style={{marginLeft:"auto",fontSize:10,color:T.muted}}>as of {asOf}</span>}
     </div>
     <EtfTargetRanking days={days} onSelectStock={onSelectStock}/>
+    <EtfFlowSection days={days} onSelectStock={onSelectStock}/>
     <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4}}><div style={{height:1,background:T.border,flex:1}}/><span style={{fontSize:10,color:T.muted}}>投信整體動能（輔助參考）</span><div style={{height:1,background:T.border,flex:1}}/></div>
     {note&&<div style={{fontSize:9,color:T.muted,background:T.card,border:`1px solid ${T.border}`,borderRadius:8,padding:"7px 10px"}}>ⓘ {note}</div>}
     {loading&&<div style={{padding:30,textAlign:"center",color:T.muted}}>⏳ 載入中…</div>}
@@ -326,7 +341,6 @@ function FundFlowPage({onSelectStock}){
         </div>
       </div>
     ))}
-    <EtfFlowSection days={days} onSelectStock={onSelectStock}/>
   </div>);
 }
 
@@ -599,7 +613,7 @@ export default function App(){
             {etfSource==="moneydj_empty"&&<span style={{fontSize:9,background:T.yellow+"18",color:T.yellow,padding:"2px 7px",borderRadius:20}}>目前追蹤的ETF清單中無人持有</span>}
             {etfSource==="error"&&<span style={{fontSize:9,background:T.sell+"18",color:T.sell,padding:"2px 7px",borderRadius:20}}>⚠ 資料來源暫時無法連線</span>}
           </div>
-          <div style={{fontSize:9,color:T.muted}}>僅涵蓋 15 檔主要台股ETF（0050、0056、006208、00878等），非市場全部ETF；僅顯示最新一期持股快照，無歷史權重可查。</div>
+          <div style={{fontSize:9,color:T.muted}}>僅涵蓋現行 22 檔台股主動式ETF（00980A、00981A等，代號結尾A），非市場全部ETF；僅顯示最新一期持股快照，無歷史權重可查。</div>
           {etfData.length===0&&C(<div style={{padding:16,textAlign:"center",color:T.muted,fontSize:12}}>查無ETF持倉資料</div>)}
           {etfData.map((etf,i)=>(
             <div key={etf.code||i} style={{background:T.card,borderRadius:10,border:`1px solid ${T.border}`,padding:"10px 14px",display:"grid",gridTemplateColumns:"1fr 100px 140px 110px",alignItems:"center",gap:12}}>
