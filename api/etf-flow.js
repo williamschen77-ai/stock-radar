@@ -1,99 +1,175 @@
-// 真正的「這N天內被幾檔ETF加碼」排行——用 cron/snapshot-etf.js 每日存進 KV
-// 的真實持股快照，比較窗口起訖兩次快照的持股張數變化。
-// 這是逐檔ETF的真實數據（不像 fund-flow.js 是投信彙總的近似值），但需要
-// 實際運行幾天之後才會有意義的資料，剛啟用時會回傳「資料累積中」。
-
 import { ACTIVE_ETF_CODES } from './_lib/moneydj.js';
 import { kvEnabled, kvGet, kvZRange } from './_lib/kv.js';
 
+const priceCache = new Map();
+const PRICE_TTL = 15 * 60 * 1000;
+
 async function fetchLatestClose(code) {
-  try {
-    const r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${code}.TW?range=5d&interval=1d`, {
-      headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(6000),
-    });
-    const d = await r.json();
-    const closes = d?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(c => c != null);
-    return closes?.length ? closes[closes.length - 1] : null;
-  } catch (_) { return null; }
+  const cached = priceCache.get(code);
+  if (cached && Date.now() - cached.at < PRICE_TTL) return cached.price;
+
+  for (const suffix of ['TW', 'TWO']) {
+    try {
+      const response = await fetch(
+        `https://query1.finance.yahoo.com/v8/finance/chart/${code}.${suffix}?range=5d&interval=1d`,
+        { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(6000) },
+      );
+      const payload = await response.json();
+      const quotes = payload?.chart?.result?.[0]?.indicators?.quote?.[0];
+      const closes = quotes?.close || [];
+      const volumes = quotes?.volume || [];
+      for (let i = closes.length - 1; i >= 0; i--) {
+        if (closes[i] != null && (volumes[i] || 0) > 0) {
+          priceCache.set(code, { price: closes[i], at: Date.now() });
+          return closes[i];
+        }
+      }
+    } catch (_) {
+      // Try the other Taiwan suffix.
+    }
+  }
+  return null;
+}
+
+function parseSnapshot(raw) {
+  try { return raw ? JSON.parse(raw) : null; } catch (_) { return null; }
+}
+
+function holdingMap(snapshot) {
+  return new Map((snapshot?.holdings || []).map(holding => [holding.code, holding]));
 }
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  const days = Math.min(20, Math.max(1, parseInt(req.query.days, 10) || 5));
+  res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
+  const days = Math.min(20, Math.max(2, parseInt(req.query.days, 10) || 5));
 
   if (!kvEnabled()) {
-    return res.json({ ok: false, reason: 'kv_not_configured', message: '尚未啟用歷史持股追蹤（需連接 Vercel KV）' });
+    return res.json({ ok: false, reason: 'kv_not_configured', message: '尚未連接 Vercel KV，無法讀取 ETF 歷史快照。' });
   }
 
   try {
-    // 每檔ETF各自的快照日期清單（依日期由舊到新）
-    const perEtfDates = await Promise.all(
-      ACTIVE_ETF_CODES.map(code => kvZRange(`etfsnap:${code}:dates`, 0, -1).then(dates => ({ code, dates: dates || [] })))
-    );
-    const daysCollected = Math.max(0, ...perEtfDates.map(e => e.dates.length));
+    const dateRows = await Promise.all(ACTIVE_ETF_CODES.map(async code => ({
+      code,
+      dates: (await kvZRange(`etfsnap:${code}:dates`, 0, -1)) || [],
+    })));
+    const available = dateRows.filter(row => row.dates.length >= 2);
+    const daysCollected = Math.max(0, ...dateRows.map(row => row.dates.length));
 
-    if (daysCollected < 2) {
-      return res.json({ ok: false, reason: 'collecting', daysCollected, message: `歷史資料累積中（目前 ${daysCollected} 天），至少需要 2 天才能算出變化` });
+    if (!available.length) {
+      return res.json({
+        ok: false, reason: 'collecting', daysCollected,
+        message: `資料累積中，目前 ${daysCollected} 個揭露日；至少需要 2 個揭露日才能比較 ETF 加減碼。`,
+      });
     }
 
-    // 每檔ETF：取窗口內最早與最新的快照，比較持股張數變化
-    const perEtfDelta = await Promise.all(perEtfDates.map(async ({ code, dates }) => {
-      const window = dates.slice(-days);
-      if (window.length < 2) return null;
-      const [startDate, endDate] = [window[0], window[window.length - 1]];
-      const [startRaw, endRaw] = await Promise.all([
-        kvGet(`etfsnap:${code}:${startDate}`),
-        kvGet(`etfsnap:${code}:${endDate}`),
-      ]);
-      if (!startRaw || !endRaw) return null;
-      const start = JSON.parse(startRaw), end = JSON.parse(endRaw);
-      const startMap = new Map(start.holdings.map(h => [h.code, h.shares]));
-      const deltas = end.holdings.map(h => ({
-        stockCode: h.code, stockName: h.name,
-        sharesDelta: h.shares - (startMap.get(h.code) || 0),
-      }));
-      return { etfCode: code, etfName: end.name, startDate, endDate, deltas };
+    const perEtf = await Promise.all(available.map(async ({ code, dates }) => {
+      const windowDates = dates.slice(-days);
+      const raws = await Promise.all(windowDates.map(date => kvGet(`etfsnap:${code}:${date}`)));
+      const snapshots = raws.map(parseSnapshot).filter(Boolean);
+      if (snapshots.length < 2) return null;
+      const first = snapshots[0];
+      const last = snapshots[snapshots.length - 1];
+      const startMap = holdingMap(first);
+      const endMap = holdingMap(last);
+      const allCodes = new Set([...startMap.keys(), ...endMap.keys()]);
+      const deltas = [...allCodes].map(stockCode => {
+        const from = startMap.get(stockCode);
+        const to = endMap.get(stockCode);
+        const sharesDelta = (to?.shares || 0) - (from?.shares || 0);
+        return {
+          stockCode,
+          stockName: to?.name || from?.name || stockCode,
+          sharesDelta,
+          startWeight: from?.weight ?? 0,
+          endWeight: to?.weight ?? 0,
+          weightDelta: +((to?.weight || 0) - (from?.weight || 0)).toFixed(3),
+        };
+      }).filter(delta => delta.sharesDelta !== 0);
+      return {
+        etfCode: code,
+        etfName: last.name || code,
+        startDate: windowDates[0],
+        endDate: windowDates[windowDates.length - 1],
+        deltas,
+      };
     }));
 
-    const valid = perEtfDelta.filter(Boolean);
-    if (!valid.length) {
-      return res.json({ ok: false, reason: 'collecting', daysCollected, message: '窗口內資料不足，請稍後再試或縮短天數' });
-    }
-
-    // 依股票彙總：幾檔ETF加碼/減碼、總張數變化
-    const agg = new Map();
-    for (const etf of valid) {
-      for (const d of etf.deltas) {
-        if (d.sharesDelta === 0) continue;
-        if (!agg.has(d.stockCode)) agg.set(d.stockCode, { code: d.stockCode, name: d.stockName, etfsUp: [], etfsDown: [], netShares: 0 });
-        const e = agg.get(d.stockCode);
-        e.netShares += d.sharesDelta;
-        if (d.sharesDelta > 0) e.etfsUp.push(etf.etfCode); else e.etfsDown.push(etf.etfCode);
+    const targets = new Map();
+    for (const etf of perEtf.filter(Boolean)) {
+      for (const delta of etf.deltas) {
+        if (!targets.has(delta.stockCode)) {
+          targets.set(delta.stockCode, {
+            code: delta.stockCode,
+            name: delta.stockName,
+            buyers: [],
+            sellers: [],
+            netShares: 0,
+          });
+        }
+        const target = targets.get(delta.stockCode);
+        const item = {
+          etfCode: etf.etfCode,
+          etfName: etf.etfName,
+          sharesDelta: delta.sharesDelta,
+          startWeight: delta.startWeight,
+          endWeight: delta.endWeight,
+          weightDelta: delta.weightDelta,
+        };
+        target.netShares += delta.sharesDelta;
+        (delta.sharesDelta > 0 ? target.buyers : target.sellers).push(item);
       }
     }
 
-    let list = Array.from(agg.values());
-    list.sort((a, b) => b.etfsUp.length - a.etfsUp.length || b.netShares - a.netShares);
-    list = list.slice(0, 30);
+    let ranked = [...targets.values()].filter(target => target.buyers.length > 0);
+    const prices = await Promise.all(ranked.map(target => fetchLatestClose(target.code)));
+    ranked = ranked.map((target, index) => {
+      const price = prices[index];
+      const netNtd = price == null ? null : target.netShares * price;
+      return {
+        ...target,
+        price,
+        netNtd,
+        buyNtd: price == null ? null : target.buyers.reduce((sum, buyer) => sum + buyer.sharesDelta * price, 0),
+        sellNtd: price == null ? null : target.sellers.reduce((sum, seller) => sum + Math.abs(seller.sharesDelta) * price, 0),
+      };
+    });
+    ranked.sort((a, b) => (b.buyNtd || 0) - (a.buyNtd || 0) || b.buyers.length - a.buyers.length);
 
-    const prices = await Promise.all(list.map(e => fetchLatestClose(e.code)));
-    list.forEach((e, i) => {
-      e.price = prices[i];
-      // netShares 已是原始股數（非「張」），直接乘價格換算金額（億元）
-      e.amountYi = e.price != null ? +((e.netShares * e.price) / 1e8).toFixed(1) : null;
+    const toPublic = target => ({
+      code: target.code,
+      name: target.name,
+      price: target.price,
+      etfCount: target.buyers.length,
+      sellEtfCount: target.sellers.length,
+      buyNtd: target.buyNtd,
+      netNtd: target.netNtd,
+      buyers: target.buyers
+        .sort((a, b) => b.sharesDelta - a.sharesDelta)
+        .map(buyer => ({ ...buyer, buyNtd: target.price == null ? null : buyer.sharesDelta * target.price })),
+      sellers: target.sellers
+        .sort((a, b) => a.sharesDelta - b.sharesDelta)
+        .map(seller => ({ ...seller, sellNtd: target.price == null ? null : Math.abs(seller.sharesDelta) * target.price })),
     });
 
-    const consensusBuy = list.filter(e => e.etfsUp.length >= 3).sort((a, b) => b.etfsUp.length - a.etfsUp.length);
-    const concentrated = list.filter(e => (e.amountYi || 0) >= 3).sort((a, b) => (b.amountYi || 0) - (a.amountYi || 0));
-    const consensusSell = Array.from(agg.values()).filter(e => e.etfsDown.length >= 3).sort((a, b) => b.etfsDown.length - a.etfsDown.length);
-
+    const rows = ranked.slice(0, 30).map(toPublic);
     return res.json({
-      ok: true, days, daysCollected, trackedEtfCount: ACTIVE_ETF_CODES.length,
-      consensusBuy: consensusBuy.map(e => ({ code: e.code, name: e.name, etfCount: e.etfsUp.length, amountYi: e.amountYi })),
-      concentrated: concentrated.map(e => ({ code: e.code, name: e.name, etfCount: e.etfsUp.length, amountYi: e.amountYi })),
-      consensusSell: consensusSell.map(e => ({ code: e.code, name: e.name, etfCount: e.etfsDown.length, amountYi: e.amountYi })),
+      ok: true,
+      asOf: perEtf.filter(Boolean).map(row => row.endDate).sort().at(-1) || null,
+      days,
+      daysCollected,
+      trackedEtfCount: ACTIVE_ETF_CODES.length,
+      coveredEtfCount: perEtf.filter(Boolean).length,
+      ranking: rows,
+      consensusBuy: rows.filter(row => row.etfCount >= 3),
+      concentrated: rows.filter(row => (row.buyNtd || 0) >= 3e8),
+      consensusSell: ranked
+        .filter(target => target.sellers.length >= 3)
+        .sort((a, b) => b.sellers.length - a.sellers.length)
+        .slice(0, 30)
+        .map(toPublic),
     });
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: e.message });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: error.message });
   }
 }
