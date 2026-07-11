@@ -255,7 +255,7 @@ function EtfTargetRanking({days,onSelectStock}){
 function ActiveEtfUniverse({onSelectStock}){
   const [etfs,setEtfs]=useState([]);const [status,setStatus]=useState(null);const [loading,setLoading]=useState(true);
   useEffect(()=>{
-    Promise.allSettled([apiFetch('/api/active-etfs'),apiFetch('/api/etf-status')]).then(([list,tracking])=>{
+    Promise.allSettled([apiFetch('/api/etf-flow?view=universe'),apiFetch('/api/etf-flow?view=status')]).then(([list,tracking])=>{
       if(list.status==='fulfilled')setEtfs(list.value.data||[]);
       if(tracking.status==='fulfilled')setStatus(tracking.value);
     }).finally(()=>setLoading(false));

@@ -1,8 +1,10 @@
-import { ACTIVE_ETF_CODES } from './_lib/moneydj.js';
+import { ACTIVE_ETF_CODES, fetchEtfHoldings } from './_lib/moneydj.js';
 import { kvEnabled, kvGet, kvZRange } from './_lib/kv.js';
 
 const priceCache = new Map();
 const PRICE_TTL = 15 * 60 * 1000;
+const UNIVERSE_TTL = 30 * 60 * 1000;
+let universeCache = { at: 0, data: [] };
 
 async function fetchLatestClose(code) {
   const cached = priceCache.get(code);
@@ -39,10 +41,54 @@ function holdingMap(snapshot) {
   return new Map((snapshot?.holdings || []).map(holding => [holding.code, holding]));
 }
 
+async function getUniverse() {
+  if (universeCache.data.length && Date.now() - universeCache.at < UNIVERSE_TTL) return universeCache.data;
+  const fetched = await Promise.all(ACTIVE_ETF_CODES.map(code => fetchEtfHoldings(code).catch(() => null)));
+  const data = fetched.filter(Boolean).filter(etf => etf.holdings.length).map(etf => ({
+    code: etf.code,
+    name: etf.name,
+    asOf: etf.asOf,
+    holdingsCount: etf.holdings.length,
+    topHoldings: [...etf.holdings].sort((a, b) => b.weight - a.weight).slice(0, 3),
+  }));
+  if (data.length) universeCache = { at: Date.now(), data };
+  return universeCache.data;
+}
+
+async function getTrackingStatus() {
+  if (!kvEnabled()) return {
+    kvConnected: false,
+    trackedEtfCount: ACTIVE_ETF_CODES.length,
+    coveredEtfCount: 0,
+    maxSnapshots: 0,
+    latestSnapshot: null,
+  };
+  const rows = await Promise.all(ACTIVE_ETF_CODES.map(async code => {
+    const dates = (await kvZRange(`etfsnap:${code}:dates`, 0, -1)) || [];
+    return { count: dates.length, latest: dates.at(-1) || null };
+  }));
+  const covered = rows.filter(row => row.count > 0);
+  return {
+    kvConnected: true,
+    trackedEtfCount: ACTIVE_ETF_CODES.length,
+    coveredEtfCount: covered.length,
+    maxSnapshots: Math.max(0, ...rows.map(row => row.count)),
+    latestSnapshot: covered.map(row => row.latest).sort().at(-1) || null,
+  };
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
+  const view = req.query.view || 'flow';
   const days = Math.min(20, Math.max(2, parseInt(req.query.days, 10) || 5));
+
+  try {
+    if (view === 'universe') return res.json({ data: await getUniverse(), source: 'moneydj' });
+    if (view === 'status') return res.json(await getTrackingStatus());
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
 
   if (!kvEnabled()) {
     return res.json({ ok: false, reason: 'kv_not_configured', message: '尚未連接 Vercel KV，無法讀取 ETF 歷史快照。' });
