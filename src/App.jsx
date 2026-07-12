@@ -266,6 +266,57 @@ function holdingsLabel(etf){
   if(!total||total<=etf.holdingsCount)return`${etf.holdingsCount} 檔持股`;
   return`${etf.holdingsCount}／${total} 檔台股（其餘為海外持股，暫不列入）`;
 }
+function formatYi(ntd){
+  if(ntd==null)return"—";
+  return`${ntd>=0?"+":""}${(ntd/1e8).toFixed(2)}億`;
+}
+function EtfChangeGroup({title,color,items,maxAmount,onSelectStock}){
+  if(!items.length)return null;
+  const total=items.reduce((sum,c)=>sum+(c.amountNtd||0),0);
+  return(<div style={{marginBottom:12}}>
+    <div style={{fontSize:11,fontWeight:700,color,marginBottom:6}}>{title} {items.length} <span style={{fontWeight:400,color:T.muted}}>· 合計 {(Math.abs(total)/1e8).toFixed(2)}億</span></div>
+    <div style={{display:"flex",flexDirection:"column",gap:5}}>
+      {items.map(c=>{const barPct=maxAmount>0?Math.max(4,Math.min(100,Math.abs(c.amountNtd||0)/maxAmount*100)):0;return(
+        <div key={c.code} onClick={()=>onSelectStock(c.code)} style={{cursor:"pointer",background:T.surface,borderRadius:7,padding:"6px 9px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}>
+            <span><b>{c.name}</b> <span style={{color:T.muted,fontSize:9}}>{c.code}</span></span>
+            <b style={{color}}>{formatYi(c.amountNtd)}</b>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:7}}>
+            <div style={{flex:1,height:4,background:T.dim,borderRadius:2,overflow:"hidden"}}><div style={{width:`${barPct}%`,height:"100%",background:color,borderRadius:2}}/></div>
+            <span style={{fontSize:9,color:T.muted,whiteSpace:"nowrap"}}>{c.sharesDelta>0?"+":""}{Math.round(c.sharesDelta/1000).toLocaleString()}張 · {c.weightDelta>0?"+":""}{c.weightDelta.toFixed(2)}pp</span>
+          </div>
+        </div>
+      );})}
+    </div>
+  </div>);
+}
+function EtfDetailPanel({detail,onSelectStock}){
+  const groups={ADD:[],REDUCE:[],NEW:[],EXIT:[]};
+  for(const c of detail.changes||[])(groups[c.action]||(groups[c.action]=[])).push(c);
+  const maxAmount=Math.max(1,...(detail.changes||[]).map(c=>Math.abs(c.amountNtd||0)));
+  const hasChanges=(detail.changes||[]).length>0;
+  return(<>
+    <div style={{display:"flex",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
+      <div><div style={{fontSize:17,fontWeight:900}}>{detail.name}</div><div style={{fontSize:10,color:T.muted,marginTop:3}}>{detail.code} · {holdingsLabel(detail)} · 資料日 {detail.asOf||"—"}</div></div>
+      <span style={{fontSize:10,color:T.muted}}>已累積 {detail.snapshotCount} 個揭露日{detail.compareDates&&` · 比較 ${detail.compareDates.before} → ${detail.compareDates.after}`}</span>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))",gap:14,marginTop:12}}>
+      <div>
+        <div style={{fontSize:10,color:T.muted,marginBottom:6}}>目前持股（依比重）</div>
+        {detail.holdings.slice(0,15).map(holding=>(<button key={holding.code} onClick={()=>onSelectStock(holding.code)} style={{display:"flex",justifyContent:"space-between",width:"100%",background:"none",border:"none",color:T.text,padding:"4px 0",cursor:"pointer",fontSize:11}}><span>{holding.name} <small style={{color:T.muted}}>{holding.code}</small></span><b style={{color:T.accent}}>{holding.weight.toFixed(2)}%</b></button>))}
+      </div>
+      <div>
+        <div style={{fontSize:10,color:T.muted,marginBottom:6}}>當日加減碼{detail.compareDates&&`（vs ${detail.compareDates.before}）`}</div>
+        {!hasChanges&&<div style={{fontSize:11,color:T.muted,padding:"8px 0"}}>{detail.snapshotCount<2?"累積兩個揭露日後，會在此顯示逐檔異動。":"本期無加減碼異動。"}</div>}
+        <EtfChangeGroup title="加碼" color={T.buy} items={groups.ADD} maxAmount={maxAmount} onSelectStock={onSelectStock}/>
+        <EtfChangeGroup title="減碼" color={T.sell} items={groups.REDUCE} maxAmount={maxAmount} onSelectStock={onSelectStock}/>
+        <EtfChangeGroup title="新建倉" color={T.buy} items={groups.NEW} maxAmount={maxAmount} onSelectStock={onSelectStock}/>
+        <EtfChangeGroup title="出清" color={T.sell} items={groups.EXIT} maxAmount={maxAmount} onSelectStock={onSelectStock}/>
+      </div>
+    </div>
+  </>);
+}
 function ActiveEtfUniverse({onSelectStock}){
   const [etfs,setEtfs]=useState([]),[status,setStatus]=useState(null),[loading,setLoading]=useState(true);
   const [selectedCode,setSelectedCode]=useState(null),[detail,setDetail]=useState(null),[detailLoading,setDetailLoading]=useState(false);
@@ -278,11 +329,14 @@ function ActiveEtfUniverse({onSelectStock}){
   useEffect(()=>{if(!selectedCode){setDetail(null);return;}setDetailLoading(true);apiFetch(`/api/etf-flow?view=etf&code=${selectedCode}`).then(setDetail).catch(()=>setDetail(null)).finally(()=>setDetailLoading(false));},[selectedCode]);
   const statusColor=status?.kvConnected?(status.maxSnapshots>=2?T.buy:T.yellow):T.sell;
   const statusText=!status?"讀取追蹤狀態…":!status.kvConnected?"KV 尚未連接":status.maxSnapshots<2?`資料累積中：${status.maxSnapshots} 個揭露日`:`快照運作中：${status.maxSnapshots} 個揭露日`;
-  const actionMeta={NEW:["新增",T.buy],ADD:["加碼",T.buy],REDUCE:["減碼",T.sell],EXIT:["移除",T.sell]};
   return(<div style={{padding:"14px",maxWidth:1080,margin:"0 auto"}}>
     <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"start",marginBottom:12,flexWrap:"wrap"}}><div><div style={{fontSize:20,fontWeight:900}}>台灣主動ETF研究台</div><div style={{fontSize:11,color:T.muted,marginTop:4}}>即時主動ETF持股宇宙；點選 ETF 可查看持股、最新新增、加碼、減碼與移除標的。</div></div><div style={{background:statusColor+"18",border:`1px solid ${statusColor}55`,borderRadius:8,padding:"7px 10px",fontSize:10,color:statusColor}}><b>{statusText}</b>{status?.latestSnapshot&&<div style={{fontWeight:400,marginTop:2}}>最新快照 {status.latestSnapshot} · {status.coveredEtfCount}/{status.trackedEtfCount} 檔</div>}</div></div>
     {loading?<div style={{padding:28,textAlign:"center",color:T.muted}}>載入主動ETF資料…</div>:<><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:9}}>{etfs.map(etf=>(<div key={etf.code} style={{background:selectedCode===etf.code?T.accentDim:T.card,border:`1px solid ${selectedCode===etf.code?T.accent+"80":T.border}`,borderRadius:10,padding:"11px"}}><div style={{display:"flex",justifyContent:"space-between",gap:6,alignItems:"start"}}><b>{etf.name}</b><button onClick={()=>setSelectedCode(etf.code)} style={{background:"none",border:"none",color:T.accent,cursor:"pointer",fontSize:10,padding:0}}>{etf.code} · 詳情</button></div><div style={{fontSize:9,color:T.muted,margin:"4px 0 8px"}}>資料日 {etf.asOf||"—"} · {holdingsLabel(etf)}</div>{etf.topHoldings.map(holding=>(<button key={holding.code} onClick={()=>onSelectStock(holding.code)} style={{display:"flex",width:"100%",justifyContent:"space-between",background:"none",border:"none",color:T.text,padding:"3px 0",cursor:"pointer",fontSize:10}}><span>{holding.name} <span style={{color:T.muted}}>{holding.code}</span></span><span style={{color:T.buy}}>{holding.weight.toFixed(2)}%</span></button>))}</div>))}</div>
-    {selectedCode&&<div style={{marginTop:12,background:T.card,border:`1px solid ${T.border}`,borderRadius:10,padding:"13px"}}>{detailLoading?<div style={{color:T.muted,padding:12}}>載入 ETF 詳情…</div>:detail?<><div style={{display:"flex",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}><div><div style={{fontSize:17,fontWeight:900}}>{detail.name}</div><div style={{fontSize:10,color:T.muted,marginTop:3}}>{detail.code} · {holdingsLabel(detail)} · 資料日 {detail.asOf||"—"}</div></div><span style={{fontSize:10,color:T.muted}}>已累積 {detail.snapshotCount} 個快照</span></div><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(210px,1fr))",gap:12,marginTop:12}}><div><div style={{fontSize:10,color:T.muted,marginBottom:6}}>主要持股</div>{detail.holdings.slice(0,12).map(holding=>(<button key={holding.code} onClick={()=>onSelectStock(holding.code)} style={{display:"flex",justifyContent:"space-between",width:"100%",background:"none",border:"none",color:T.text,padding:"4px 0",cursor:"pointer",fontSize:11}}><span>{holding.name} <small style={{color:T.muted}}>{holding.code}</small></span><b style={{color:T.accent}}>{holding.weight.toFixed(2)}%</b></button>))}</div><div><div style={{fontSize:10,color:T.muted,marginBottom:6}}>最近快照異動</div>{detail.changes.length?detail.changes.map(change=>{const [label,color]=actionMeta[change.action]||[change.action,T.muted];return(<button key={change.code} onClick={()=>onSelectStock(change.code)} style={{display:"grid",gridTemplateColumns:"42px 1fr auto",gap:6,alignItems:"center",width:"100%",background:"none",border:"none",color:T.text,padding:"4px 0",cursor:"pointer",fontSize:11}}><b style={{color}}>{label}</b><span>{change.name} <small style={{color:T.muted}}>{change.code}</small></span><span style={{color}}>{change.weightDelta>0?"+":""}{change.weightDelta.toFixed(2)}%</span></button>)}):<div style={{fontSize:11,color:T.muted,padding:"8px 0"}}>累積兩個揭露日後，會在此顯示逐檔異動。</div>}</div></div></>:<div style={{color:T.muted}}>ETF 詳情暫時無法載入。</div>}</div>}</>}
+    {selectedCode&&<div style={{marginTop:12,background:T.card,border:`1px solid ${T.border}`,borderRadius:10,padding:"13px"}}>
+      {detailLoading&&<div style={{color:T.muted,padding:12}}>載入 ETF 詳情…</div>}
+      {!detailLoading&&detail&&<EtfDetailPanel detail={detail} onSelectStock={onSelectStock}/>}
+      {!detailLoading&&!detail&&<div style={{color:T.muted}}>ETF 詳情暫時無法載入。</div>}
+    </div>}</>}
   </div>);
 }
 

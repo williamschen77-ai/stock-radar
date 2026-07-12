@@ -100,18 +100,21 @@ async function getEtfDetail(code) {
   result.latestSnapshot = dates.at(-1) || null;
   if (dates.length < 2) return result;
 
+  const beforeDate = dates.at(-2), afterDate = dates.at(-1);
   const [beforeRaw, afterRaw] = await Promise.all([
-    kvGet(`etfsnap:${code}:${dates.at(-2)}`),
-    kvGet(`etfsnap:${code}:${dates.at(-1)}`),
+    kvGet(`etfsnap:${code}:${beforeDate}`),
+    kvGet(`etfsnap:${code}:${afterDate}`),
   ]);
   const before = parseSnapshot(beforeRaw);
   const after = parseSnapshot(afterRaw);
   if (!before || !after) return result;
 
+  result.compareDates = { before: beforeDate, after: afterDate };
+
   const beforeMap = holdingMap(before);
   const afterMap = holdingMap(after);
   const allCodes = new Set([...beforeMap.keys(), ...afterMap.keys()]);
-  result.changes = [...allCodes].map(stockCode => {
+  const changed = [...allCodes].map(stockCode => {
     const from = beforeMap.get(stockCode);
     const to = afterMap.get(stockCode);
     const sharesDelta = (to?.shares || 0) - (from?.shares || 0);
@@ -126,6 +129,13 @@ async function getEtfDetail(code) {
       weightDelta: +((to?.weight || 0) - (from?.weight || 0)).toFixed(3),
     };
   }).filter(change => change.action !== 'HOLD').sort((a, b) => Math.abs(b.sharesDelta) - Math.abs(a.sharesDelta)).slice(0, 30);
+
+  const prices = await Promise.all(changed.map(change => fetchLatestClose(change.code)));
+  result.changes = changed.map((change, index) => ({
+    ...change,
+    price: prices[index],
+    amountNtd: prices[index] == null ? null : change.sharesDelta * prices[index],
+  }));
   return result;
 }
 
